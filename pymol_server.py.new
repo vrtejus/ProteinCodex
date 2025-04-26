@@ -1,0 +1,276 @@
+import socket
+import threading
+import json
+import traceback
+import sys
+import time
+import os
+import io
+
+# Import PyMOL for testing direct interface
+# These imports only work within PyMOL's Python environment
+try:
+    from pymol import cmd
+    PYMOL_AVAILABLE = True
+    print("PyMOL module found and imported.")
+except ImportError:
+    PYMOL_AVAILABLE = False
+    print("WARNING: PyMOL module not available. Running in test/stub mode.")
+
+class PyMOLServer:
+    def __init__(self, host='localhost', port=9876):
+        self.host = host
+        self.port = port
+        self.server_socket = None
+        self.running = False
+        self.server_thread = None
+        
+    def start(self):
+        """Start the PyMOL server."""
+        if not PYMOL_AVAILABLE:
+            print("WARNING: PyMOL is not available. Server will run in stub mode.")
+        
+        # Create server socket
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind((self.host, self.port))
+            self.server_socket.listen(5)
+            self.running = True
+            
+            # Start server thread
+            self.server_thread = threading.Thread(target=self._run_server, daemon=True)
+            self.server_thread.start()
+            
+            print(f"PyMOL server started on {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            print(f"Error starting PyMOL server: {e}")
+            traceback.print_exc()
+            if self.server_socket:
+                self.server_socket.close()
+            self.running = False
+            return False
+    
+    def stop(self):
+        """Stop the PyMOL server."""
+        self.running = False
+        if self.server_socket:
+            self.server_socket.close()
+        if self.server_thread and self.server_thread.is_alive():
+            self.server_thread.join(timeout=3)
+        print("PyMOL server stopped")
+    
+    def _run_server(self):
+        """Run the server loop."""
+        while self.running:
+            try:
+                client_socket, client_address = self.server_socket.accept()
+                print(f"Connection from {client_address}")
+                
+                # Handle client in a new thread
+                client_thread = threading.Thread(
+                    target=self._handle_client,
+                    args=(client_socket, client_address),
+                    daemon=True
+                )
+                client_thread.start()
+            except socket.error as e:
+                if self.running:  # Only log if we're still supposed to be running
+                    print(f"Socket error in server loop: {e}")
+            except Exception as e:
+                if self.running:
+                    print(f"Error in server loop: {e}")
+                    traceback.print_exc()
+    
+    def _handle_client(self, client_socket, client_address):
+        """Handle client connection."""
+        try:
+            buffer = ""
+            while self.running:
+                # Receive data
+                data = client_socket.recv(4096).decode('utf-8')
+                if not data:
+                    break
+                
+                buffer += data
+                # Try to process complete JSON objects
+                while '\n' in buffer:
+                    # Extract a complete message (assuming one JSON object per line)
+                    message_text, buffer = buffer.split('\n', 1)
+                    if message_text.strip():  # Skip empty lines
+                        try:
+                            message = json.loads(message_text)
+                            response = self._process_command(message)
+                            # Send response
+                            client_socket.sendall((json.dumps(response) + '\n').encode('utf-8'))
+                        except json.JSONDecodeError as e:
+                            print(f"Error decoding JSON: {e}")
+                            error_response = {"status": "error", "error": f"Invalid JSON: {str(e)}"}
+                            client_socket.sendall((json.dumps(error_response) + '\n').encode('utf-8'))
+                        except Exception as e:
+                            print(f"Error processing message: {e}")
+                            traceback.print_exc()
+                            error_response = {"status": "error", "error": f"Server error: {str(e)}"}
+                            client_socket.sendall((json.dumps(error_response) + '\n').encode('utf-8'))
+        except Exception as e:
+            print(f"Error handling client {client_address}: {e}")
+            traceback.print_exc()
+        finally:
+            client_socket.close()
+            print(f"Connection from {client_address} closed")
+    
+    def _process_command(self, message):
+        """Process a command message."""
+        if not PYMOL_AVAILABLE:
+            return {"status": "error", "error": "PyMOL is not available in this environment."}
+        
+        try:
+            # Message should be a dict with a "cmd" key
+            if "cmd" not in message:
+                print("[PyMOLServer] Error: 'cmd' key missing in message.")
+                return {"status": "error", "error": "Invalid message format: 'cmd' key missing."}
+
+            command_to_run = message["cmd"] # The raw command string like "fetch 1hpv"
+            print(f"[PyMOLServer] Received command string: {command_to_run}")
+
+            # --- Prepare Python code to execute the command string ---
+            # We need to ensure it runs within PyMOL's context.
+            # Using cmd.do() is the standard way to execute command strings safely.
+            # Let's try to capture stdout/stderr from cmd.do if possible.
+
+            execution_output = io.StringIO()
+            execution_error = io.StringIO()
+            success_flag = False
+            result_data = None
+
+            # Use cmd.lock_api for thread safety
+            with cmd.lock_api:
+                # Redirect stdout and stderr temporarily (within PyMOL's context)
+                original_stdout = sys.stdout
+                original_stderr = sys.stderr
+                sys.stdout = execution_output
+                sys.stderr = execution_error
+                try:
+                    # Execute the command string using cmd.do
+                    print(f"[PyMOLServer] Executing via cmd.do('{command_to_run}')")
+                    cmd.do(command_to_run)
+                    # If cmd.do completes without raising an exception, assume basic success
+                    success_flag = True
+                    print(f"[PyMOLServer] cmd.do('{command_to_run}') completed.")
+                    
+                    # Extract command word and arguments for special handling
+                    command_parts = command_to_run.split(None, 1)
+                    command_word = command_parts[0].lower() if command_parts else ""
+                    command_args = command_parts[1] if len(command_parts) > 1 else ""
+                    
+                    # Add specific checks after execution if needed
+                    if command_word == "load":
+                        # Check if the object name (usually the filename base) exists
+                        potential_obj_name = os.path.splitext(os.path.basename(command_args.split()[0]))[0] if command_args else None
+                        # PyMOL might lowercase object names from load/fetch
+                        potential_obj_name_lower = potential_obj_name.lower() if potential_obj_name else None
+                        loaded_objects = [name.lower() for name in cmd.get_names("objects")]
+
+                        if potential_obj_name_lower and potential_obj_name_lower not in loaded_objects:
+                             # Check common error messages in captured stderr
+                             err_output_check = execution_error.getvalue().lower()
+                             if "unsupported file type" in err_output_check or "unable to open" in err_output_check:
+                                  pymol_error_detected = f"Error loading file. {execution_error.getvalue().strip()}"
+                                  success_flag = False # Mark as failure
+                                  result_data = {"load_status": "error", "message": pymol_error_detected}
+                             else:
+                                  # Success but with warnings about potential issues
+                                  pymol_error_detected = f"Warning: Object may not have loaded correctly. {execution_error.getvalue().strip()}"
+                                  result_data = {"load_status": "warning", "message": pymol_error_detected}
+
+                    elif command_word == "fetch":
+                        # Fetch usually names the object same as the code (often lowercase)
+                        obj_name = command_args.split()[0].strip().lower() if command_args else None
+                        loaded_objects = [name.lower() for name in cmd.get_names("objects")]
+
+                        if obj_name and obj_name in loaded_objects:
+                            atom_count = cmd.count_atoms(f"({obj_name})") # Use the potentially lowercased name
+                            result_data = {"fetch_status": "success", "object": obj_name, "atoms": atom_count}
+                            print(f"[PyMOLServer] Fetch successful: {result_data}")
+                        elif obj_name: # Only report error if an object name was expected
+                            pymol_error_detected = f"Error: Object '{obj_name}' not found after 'fetch'. Check PDB ID and network."
+                            success_flag = False # Mark as failure
+                            result_data = {"fetch_status": "error", "message": pymol_error_detected}
+                except Exception as exec_err:
+                    print(f"[PyMOLServer] Exception during cmd.do('{command_to_run}'): {exec_err}")
+                    traceback.print_exc(file=execution_error) # Capture traceback to stderr string
+                    success_flag = False
+                    result_data = {"execution_error": str(exec_err)}
+                finally:
+                    # Restore original stdout and stderr
+                    sys.stdout = original_stdout
+                    sys.stderr = original_stderr
+
+            output_str = execution_output.getvalue()
+            error_str = execution_error.getvalue()
+
+            print(f"[PyMOLServer] Captured stdout:\n{output_str}")
+            print(f"[PyMOLServer] Captured stderr:\n{error_str}")
+
+            if success_flag:
+                response = {
+                    "status": "success",
+                    "command_executed": command_to_run,
+                    "result": result_data if result_data else "Command completed.", # Include specific results if captured
+                    "stdout": output_str,
+                    "stderr": error_str # Include stderr even on success, might contain warnings
+                }
+            else:
+                 response = {
+                    "status": "error",
+                    "command_executed": command_to_run,
+                    "error": result_data.get("execution_error", "Execution failed") if result_data else "Execution failed",
+                    "stdout": output_str,
+                    "stderr": error_str
+                }
+
+            return response
+
+        except Exception as e:
+            error_msg = traceback.format_exc()
+            print(f"[PyMOLServer] Unexpected error in _process_command for '{command_to_run}': {error_msg}")
+            return {"status": "error", "command": command_to_run, "error": f"Server processing error: {str(e)}", "traceback": error_msg[:500]}
+
+# PyMOL plugin initialization function
+def __init_plugin__(app=None):
+    # Create a menu item in PyMOL
+    from pymol.plugins import addmenuitemqt
+    addmenuitemqt('Start ProteinCodex Server', start_server)
+    
+    # If you want to start the server automatically, uncomment this line:
+    # start_server()
+    
+    print("ProteinCodex PyMOL plugin initialized")
+
+# Function to start the server
+def start_server():
+    global server
+    if 'server' in globals() and server.running:
+        print("Server is already running")
+        return
+    
+    server = PyMOLServer()
+    server.start()
+
+# To use this as a standalone script
+if __name__ == "__main__":
+    print("--- Starting PyMOL Server Standalone ---")
+    server = PyMOLServer()
+    if server.start():
+        print("Server started. Waiting for connections...")
+        try:
+            # Keep the main thread alive
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down server...")
+            server.stop()
+            print("Server stopped.")
+    else:
+        print("Failed to start server.")

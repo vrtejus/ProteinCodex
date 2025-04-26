@@ -124,6 +124,7 @@ except Exception as client_err:
 
 # --- Constants ---
 MODEL_NAME = "models/gemini-2.5-flash-preview-04-17" # The specific model name
+# MODEL_NAME = "gemini-2.5-pro-preview-03-25" # Use the correct model name
 
 # --- In-memory storage for active chat sessions ---
 # Dictionary mapping chat_id (string) to a list of `types.Content` objects (the history)
@@ -226,7 +227,7 @@ def process_message_with_gemini(chat_id: str, user_message: str, image_path=None
                   final_text = "Error: Received an unexpected or incomplete response from the AI model."
                   print(f"Unexpected chat response structure: {response}")
              # Append user message and this error response to history before returning
-             active_chats[chat_id].append(types.Content(role="user", parts=content_parts))
+             active_chats[chat_id].append(current_user_content) # <<< Use current_user_content here
              active_chats[chat_id].append(types.Content(role="model", parts=[types.Part.from_text(final_text)])) # Approximate model response
              return final_text # Return the error/block message
 
@@ -237,7 +238,7 @@ def process_message_with_gemini(chat_id: str, user_message: str, image_path=None
             print(f"Arguments: {dict(function_call.args)}")
 
             # Append the user message and the model's function call request to history
-            active_chats[chat_id].append(types.Content(role="user", parts=content_parts))
+            active_chats[chat_id].append(current_user_content) # <<< Use current_user_content here
             active_chats[chat_id].append(types.Content(role="model", parts=[response_part])) # Store the part containing the call
 
             # Execute the function (Your execute_pymol_command)
@@ -281,10 +282,17 @@ def process_message_with_gemini(chat_id: str, user_message: str, image_path=None
         else:
             # --- No Function Call -> Direct Text Response ---
             print("Received direct text response (no function call).")
-            final_text = response.text # Should exist if no function call
-            # Append user message and this model response to history
-            active_chats[chat_id].append(types.Content(role="user", parts=content_parts))
-            active_chats[chat_id].append(response.candidates[0].content) # Store the Content object
+            # Extract text safely
+            final_text = "Error: Could not extract text from response." # Default in case of error below
+            try:
+                final_text = response.text # Should exist if no function call
+                # Append user message and this model response to history
+                active_chats[chat_id].append(current_user_content) # <<< Use current_user_content here
+                active_chats[chat_id].append(response.candidates[0].content) # Store the Content object
+            except (ValueError, IndexError, AttributeError, TypeError):
+                print(f"Error extracting text from direct response: {response}")
+                active_chats[chat_id].append(current_user_content) # Still store user turn if possible
+                active_chats[chat_id].append(types.Content(role="model", parts=[types.Part.from_text(text=final_text)]))
 
 
         processing_time = time.time() - start_time
