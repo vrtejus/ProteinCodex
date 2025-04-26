@@ -174,16 +174,16 @@ ipcMain.on('stt:start-transcription', (event) => {
     }
 });
 
-ipcMain.on('stt:stop-transcription', (event) => {
+ipcMain.on('stt:request-stop-transcription', (event) => { // Renamed handler
     if (isTranscribing) {
         console.log("Main: Received stop-transcription. Sending command to helper.");
-        isTranscribing = false;
-        // Update UI immediately (listening active, but not transcribing)
         // The helper sending 'finalResult' will trigger the state update now
+        // We don't set isTranscribing = false here anymore. It's set when the helper
+        // confirms the end by sending 'finalResult' or 'error'.
         // sendVoiceStateUpdate(sender); // Optional: Update UI faster? Might cause flicker.
         // Tell the helper to stop processing audio for this request
         if (sttSocketClient && !sttSocketClient.destroyed) {
-            sendToSpeechHelper({ command: 'stop' });
+            sendToSpeechHelper({ command: 'stop' }); // Send stop command
         } else {
              console.warn("Main: Cannot send 'stop' command, no connection to speech helper.");
         }
@@ -325,26 +325,29 @@ function connectToSpeechHelper() {
     });
 
     sttSocketClient.on('data', (data) => {
-        receivedDataBuffer += data.toString('utf-8');
+        const receivedString = data.toString('utf-8');
+        receivedDataBuffer += receivedString;
         console.log(`Socket data received (Buffer: ${receivedDataBuffer.length} bytes)`);
 
         // Process buffer for complete JSON messages (newline-delimited)
         let boundary = receivedDataBuffer.indexOf('\n');
         while (boundary !== -1) {
             const jsonString = receivedDataBuffer.substring(0, boundary).trim();
-            receivedDataBuffer = receivedDataBuffer.substring(boundary + 1);
+            receivedDataBuffer = receivedDataBuffer.substring(boundary + 1); // Consume message + newline
 
             if (jsonString) {
                 try {
                     const message = JSON.parse(jsonString);
-                    console.log("[From Helper]:", message);
+                    console.log("[From Helper]:", JSON.stringify(message)); // Log parsed object
                     // Process message from helper
                     switch (message.type) {
                         case 'interimResult':
+                            if (typeof message.transcript === 'string')
                             sendToRenderer('stt:interim-result', message.transcript);
                             break;
                         case 'finalResult':
                             // Helper indicates it's done with *this* transcription
+                            if (typeof message.transcript === 'string')
                             isTranscribing = false; // Update state based on helper signal
                             sendVoiceStateUpdate();
                             sendToRenderer('stt:final-result', message.transcript);
@@ -358,7 +361,7 @@ function connectToSpeechHelper() {
                         case 'ready': // Optional: Helper signals it's ready
                              console.log("Speech helper signaled ready.");
                              break;
-                        default:
+                         default:
                             console.warn("Received unknown message type from helper:", message.type);
                     }
                 } catch (e) {
@@ -366,7 +369,7 @@ function connectToSpeechHelper() {
                     console.error('Received string:', jsonString);
                 }
             }
-            boundary = receivedDataBuffer.indexOf('\n'); // Check for next message
+            boundary = receivedDataBuffer.indexOf('\n'); // Check for next message boundary in the remaining buffer
         }
     });
 

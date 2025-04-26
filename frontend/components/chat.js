@@ -73,6 +73,10 @@ class ChatUI {
         // Global keydown listener
         document.addEventListener('keydown', (e) => {
             if (e.code !== 'Space' || this.sttState.isTranscribing || e.repeat) {
+                // If space is held while already transcribing, prevent default still
+                if (e.code === 'Space' && this.sttState.isTranscribing && document.activeElement === this.chatInput) {
+                     e.preventDefault();
+                 }
                 return; // Only handle Spacebar, ignore if already transcribing or key repeat
             }
 
@@ -103,7 +107,9 @@ class ChatUI {
             // Check if spacebar is released AND we were transcribing
             if (e.code === 'Space' && this.sttState.isTranscribing) {
                 console.log("Space up: Stopping transcription and sending message.");
-                this.stopTranscriptionAndSend(); // New method
+                // *** Change: Request stop, don't send immediately ***
+                this.requestStopTranscription();
+                // Sending will now happen in the onSttFinalResult handler
             }
         });
 
@@ -120,12 +126,23 @@ class ChatUI {
 
         // Listen for transcription results
         window.electronAPI.onSttInterimResult(transcript => {
-            this.chatInput.value = transcript; // Update input with interim results
-            this.autoResizeInput(); // Resize input as text changes
+             if (this.sttState.isTranscribing) { // Only update if still supposed to be transcribing
+                this.chatInput.value = transcript; // Update input with interim results
+                this.autoResizeInput(); // Resize input as text changes
+             }
         });
         window.electronAPI.onSttFinalResult(transcript => {
             this.chatInput.value = transcript; // Set final result
-            this.chatInput.focus(); // Focus input after transcription
+            this.autoResizeInput();
+            // *** Send the message ONLY when the final result arrives ***
+            if (this.chatInput.value.trim()) { // Check if there's actual text
+                console.log("Renderer: Received final transcript, sending message.");
+                this.sendMessage();
+            } else {
+                 console.log("Renderer: Received empty final transcript, not sending.");
+            }
+             // Focus might be disruptive if user is already typing something else
+             // this.chatInput.focus();
         });
         window.electronAPI.onSttError(error => {
             console.error("STT Error:", error);
@@ -157,9 +174,18 @@ class ChatUI {
     autoResizeInput() {
         this.chatInput.style.height = 'auto';
         this.chatInput.style.height = (this.chatInput.scrollHeight) + 'px';
-        
+
+        let lastValueOnInput = this.chatInput.value; // Use a different name to avoid confusion
         this.chatInput.addEventListener('input', () => {
-            this.chatInput.style.height = 'auto';
+            const currentValue = this.chatInput.value;
+            // *** Prevent space insertion while actively transcribing via Spacebar ***
+            if (this.sttState.isTranscribing && currentValue.endsWith(' ') && currentValue.length > lastValueOnInput.length) {
+                 // Check if the last character added was a space during transcription
+                 // console.log("Attempting to remove space during transcription");
+                 this.chatInput.value = this.chatInput.value.slice(0, -1);
+             }
+             lastValueOnInput = this.chatInput.value; // Update last value
+             this.chatInput.style.height = 'auto';
             this.chatInput.style.height = (this.chatInput.scrollHeight) + 'px';
         });
     }
@@ -168,12 +194,13 @@ class ChatUI {
      * Send a message to the API
      */
     async sendMessage() {
-        const message = this.chatInput.value.trim();
         // Ensure we have a chat ID - shouldn't happen if startNewChat runs first, but good practice
         if (!this.currentChatId) {
             console.warn("No currentChatId set, starting a new chat first.");
             this.startNewChat(); // Ensure a chat exists
+            return; // Prevent sending on initial auto-chat creation
         }
+        const message = this.chatInput.value.trim(); // Read value *now*
         if ((!message && !this.lastScreenshotPath) || this.isProcessing) return;
 
         this.isProcessing = true;
@@ -183,7 +210,6 @@ class ChatUI {
         this.storeMessage(this.currentChatId, 'user', message);
 
         // Clear input
-        this.chatInput.value = '';
         this.chatInput.style.height = 'auto';
         
         // Show typing indicator
@@ -193,6 +219,10 @@ class ChatUI {
         const imagePathToSend = this.lastScreenshotPath; // Capture image path
         this.lastScreenshotPath = null; // Clear path immediately after capturing for sending
         document.getElementById('screenshot-preview-container')?.remove(); // Clear preview
+        
+        // *** Clear input AFTER capturing messageToSend and imagePathToSend ***
+        this.chatInput.value = '';
+        this.autoResizeInput(); // Reset height after clearing
 
         try {
             let apiResponse; // Use a generic name
@@ -424,7 +454,7 @@ class ChatUI {
         this.setActiveChatItem(null);
 
         // Deactivate voice mode when starting new chat
-        this.setVoiceActivation(false);
+        if (this.sttState.isActive) this.setVoiceActivation(false); // Only deactivate if active
         // Re-attach event listeners to sample prompts
         this.attachSamplePromptListeners();
     }
@@ -551,8 +581,8 @@ class ChatUI {
         this.sttState.isActive = activate;
         console.log(`Renderer: Setting Voice Mode Active: ${this.sttState.isActive}`);
         if (!activate && this.sttState.isTranscribing) {
-            // If deactivating while transcribing, stop transcription
-            this.stopTranscription(false); // Don't auto-send if deactivated via button
+            // If deactivating while transcribing, request stop
+            this.requestStopTranscription(); // Don't auto-send if deactivated via button
         }
         this.updateVoiceButtonUI();
         // Inform main process about the desired state (optional, but good practice)
@@ -568,22 +598,14 @@ class ChatUI {
         window.electronAPI.startTranscription();
     }
 
-    /** Stops transcription (e.g., on button toggle) without sending */
-    stopTranscription(shouldSend = false) {
+    /** Requests the main process/helper to stop transcription */
+    requestStopTranscription() {
         if (!this.sttState.isTranscribing) return;
-        console.log(`Renderer: Requesting stop transcription (send=${shouldSend})`);
-        this.sttState.isTranscribing = false; // Visually update immediately
-        this.updateVoiceButtonUI();
-        window.electronAPI.stopTranscription(); // Tell main to stop helper
-        // Sending logic is now separate (in stopTranscriptionAndSend)
-    }
-
-    /** Stops transcription AND sends message (called on spacebar up) */
-    stopTranscriptionAndSend() {
-        this.stopTranscription(true); // Stop backend transcription first
-        // Send message immediately after stopping (using text currently in input)
-        console.log("Renderer: Sending message after transcription stop.");
-        this.sendMessage();
+        console.log(`Renderer: Requesting stop transcription`);
+        // UI will update when main process confirms stop via 'stt:state-change' or 'stt:final-result' arrives
+        // this.sttState.isTranscribing = false; // Don't update state prematurely
+        // this.updateVoiceButtonUI();
+        window.electronAPI.requestStopTranscription(); // Tell main to stop helper
     }
 
     updateVoiceButtonUI() {
