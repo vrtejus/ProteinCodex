@@ -132,56 +132,55 @@ ipcMain.handle('send-to-pymol', async (event, command) => {
 
 // --- STT IPC Handlers ---
 
-ipcMain.on('stt:toggle-voice-mode', (event) => {
-    const sender = event.sender;
-    isVoiceModeActive = !isVoiceModeActive;
-    isTranscribing = false; // Ensure transcribing stops if mode is toggled off
-    console.log(`Main: Voice Mode Toggled: ${isVoiceModeActive}`);
-    if (!isVoiceModeActive) {
-        // If we were transcribing, tell helper to stop
-        if (sttSocketClient && !sttSocketClient.destroyed) {
-            sendToSpeechHelper({ command: 'stop' });
-        }
-    }
-    // Send updated state back to all windows (or just the sender)
-    sendVoiceStateUpdate(sender);
-});
+// Renderer now tells main the desired state, main doesn't toggle blindly
+// We might not even need this if main only cares about start/stop commands
+// ipcMain.on('stt:set-voice-mode-active', (event, isActive) => {
+//     console.log(`Main: Received set-voice-mode-active: ${isActive}`);
+//     // If turning off while transcribing, stop it
+//     if (!isActive && isTranscribing) {
+//         console.log("Main: Voice mode deactivated during transcription, stopping helper.");
+//         stopNativeTranscription(); // Stop helper
+//         isTranscribing = false; // Update internal state
+//     }
+//     // We don't strictly need to track isActive in main if renderer manages it,
+//     // but could be useful for future logic.
+//     // isVoiceModeActive = isActive;
+//     sendVoiceStateUpdate(event.sender); // Acknowledge state change back? Maybe not needed.
+// });
 
 ipcMain.on('stt:start-transcription', (event) => {
     const sender = event.sender;
-    if (isVoiceModeActive && !isTranscribing) {
+    if (!isTranscribing) { // Prevent multiple starts
         console.log("Main: Received start-transcription. Sending command to helper.");
         if (sttSocketClient && !sttSocketClient.destroyed) {
             if(sendToSpeechHelper({ command: 'start' })) {
-                isTranscribing = true;
-                sendVoiceStateUpdate(sender);
+                isTranscribing = true; // Update main process state
+                sendVoiceStateUpdate(sender); // Notify renderer transcribing started
             } else {
                 console.error("Main: Failed to send 'start' command to helper.");
-                // Notify renderer of error
-                sendSttError(sender, "Failed to send start command to speech helper.");
+                sendSttError("Failed to send start command to speech helper.");
                 // Reset state
-                isVoiceModeActive = false;
                 isTranscribing = false;
-                sendVoiceStateUpdate(sender);
+                sendVoiceStateUpdate(); // Send reset state back
             }
         } else {
             console.error("Main: Cannot start transcription, no connection to speech helper.");
-            sendSttError(sender, "Not connected to speech recognition service.");
-            isVoiceModeActive = false; // Turn off mode if helper isn't connected
-            sendVoiceStateUpdate(sender);
+            sendSttError("Not connected to speech recognition service.");
+            isTranscribing = false; // Ensure state is correct
+            sendVoiceStateUpdate();
         }
     } else {
-         console.log("Main: Ignored start-transcription (voice mode inactive or already transcribing)");
+         console.log("Main: Ignored start-transcription (already transcribing)");
     }
 });
 
 ipcMain.on('stt:stop-transcription', (event) => {
-    const sender = event.sender;
     if (isTranscribing) {
         console.log("Main: Received stop-transcription. Sending command to helper.");
         isTranscribing = false;
         // Update UI immediately (listening active, but not transcribing)
-        sendVoiceStateUpdate(sender);
+        // The helper sending 'finalResult' will trigger the state update now
+        // sendVoiceStateUpdate(sender); // Optional: Update UI faster? Might cause flicker.
         // Tell the helper to stop processing audio for this request
         if (sttSocketClient && !sttSocketClient.destroyed) {
             sendToSpeechHelper({ command: 'stop' });
@@ -203,7 +202,7 @@ function sendToRenderer(channel, ...args) {
 }
 
 function sendVoiceStateUpdate() { // Removed webContents arg, sends to mainWindow
-    sendToRenderer('stt:state-change', { isActive: isVoiceModeActive, isTranscribing: isTranscribing });
+    sendToRenderer('stt:state-change', { isTranscribing: isTranscribing }); // Only send isTranscribing? isActive is renderer-managed
 }
 
 function sendSttError(errorMessage) { // Removed webContents arg
@@ -363,7 +362,7 @@ function connectToSpeechHelper() {
                             console.warn("Received unknown message type from helper:", message.type);
                     }
                 } catch (e) {
-                    console.error('Error parsing JSON from speech helper:', e);
+                    console.error('Main: Error parsing JSON from speech helper:', e);
                     console.error('Received string:', jsonString);
                 }
             }
@@ -373,13 +372,13 @@ function connectToSpeechHelper() {
 
     sttSocketClient.on('error', (err) => {
         console.error('Speech helper socket error:', err.message);
-        sttSocketClient = null; // Reset client
         // Attempt to reconnect or notify user
         sendSttError(`Connection error with speech helper: ${err.message}`);
         // Deactivate voice mode on error
-        isVoiceModeActive = false;
         isTranscribing = false;
         sendVoiceStateUpdate();
+        if (sttSocketClient) sttSocketClient.destroy(); // Ensure cleanup
+        sttSocketClient = null; // Reset client
         // Optionally try respawning helper
         // terminateSpeechHelper(); spawnSpeechHelper();
         // Or retry connection after delay
@@ -391,12 +390,11 @@ function connectToSpeechHelper() {
         console.log('Speech helper socket connection closed.');
         if (isTranscribing || isVoiceModeActive) {
              sendSttError("Connection to speech helper closed unexpectedly.");
-        }
-        sttSocketClient = null;
-        isVoiceModeActive = false;
+             // Reset state if connection drops mid-action
         isTranscribing = false;
         sendVoiceStateUpdate();
-        // Connection might close normally when helper exits, don't auto-retry here
+         }
+        sttSocketClient = null; // Ensure client is nulled
         // unless helper process is still running (indicates socket issue)
         if (speechHelperProcess && !speechHelperProcess.killed) {
             console.log("Helper process still running but socket closed, attempting reconnect...");
