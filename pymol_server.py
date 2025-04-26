@@ -161,26 +161,46 @@ class PyMOLServer:
                 sys.stdout = execution_output
                 sys.stderr = execution_error
                 try:
-                    # Execute the command string using cmd.do
-                    print(f"[PyMOLServer] Executing via cmd.do('{command_to_run}')")
-                    cmd.do(command_to_run)
-                    # If cmd.do completes without raising an exception, assume basic success
+                    # Separate command word and arguments for specific checks
+                    command_to_run_stripped = command_to_run.strip()
+                    parts = command_to_run_stripped.split(None, 1)
+                    command_word = parts[0].lower()
+                    command_args = parts[1] if len(parts) > 1 else ""
+
+                    # --- Execute Command ---
+                    print(f"[PyMOLServer] Processing command word: '{command_word}'")
+                    if command_word == "fetch" and command_args:
+                        # *** Use synchronous cmd.fetch for reliability ***
+                        pdb_code = command_args.split()[0] # Get the PDB code
+                        obj_name = pdb_code.lower() # PyMOL often uses lowercase for fetched objects
+                        print(f"[PyMOLServer] Executing via cmd.fetch('{pdb_code}', name='{obj_name}')")
+                        cmd.fetch(pdb_code, name=obj_name, type='pdb', async_=0) # async_=0 makes it synchronous
+                    else:
+                        # For other commands, use cmd.do
+                        print(f"[PyMOLServer] Executing via cmd.do('{command_to_run_stripped}')")
+                        cmd.do(command_to_run_stripped)
+
                     success_flag = True
-                    print(f"[PyMOLServer] cmd.do('{command_to_run}') completed.")
+                    print(f"[PyMOLServer] PyMOL command execution completed (Python level).")
+
                     # Add specific checks after execution if needed
-                    if command_to_run.startswith("fetch "):
-                         try:
-                              obj_name = command_to_run.split()[1].strip()
-                              if obj_name in cmd.get_names("objects"):
+                    if command_word == "fetch":
+                        # Verification after SYNCHRONOUS fetch call
+                        # obj_name was defined earlier for the cmd.fetch call
+                        # Check if it ACTUALLY loaded after the synchronous call
+                        loaded_objects = [name.lower() for name in cmd.get_names("objects")]
+
+                        if obj_name and obj_name in loaded_objects:
                                    atom_count = cmd.count_atoms(f"({obj_name})")
                                    result_data = {"fetch_status": "success", "object": obj_name, "atoms": atom_count}
                                    print(f"[PyMOLServer] Fetch successful: {result_data}")
-                              else:
-                                   result_data = {"fetch_status": "warning", "message": f"Object '{obj_name}' not found after fetch."}
-                                   print(f"[PyMOLServer] Warning: Object '{obj_name}' not found after fetch.")
-                         except Exception as fetch_err:
-                              print(f"[PyMOLServer] Error getting info after fetch: {fetch_err}")
-                              result_data = {"fetch_status": "error", "info_error": str(fetch_err)}
+                        elif obj_name: # Only report error if an object name was expected
+                            # If fetch was used but object not found, it's an error
+                            success_flag = False # Mark as failure
+                            result_data = {"execution_error": f"Object '{obj_name}' not found after synchronous fetch attempt. Check PDB ID and network."}
+                            print(f"[PyMOLServer] Warning: Object '{obj_name}' not found after fetch.")
+
+                    # Add other post-execution checks if needed (e.g., for 'load')
 
                 except Exception as exec_err:
                     print(f"[PyMOLServer] Exception during cmd.do('{command_to_run}'): {exec_err}")
