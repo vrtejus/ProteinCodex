@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProteinCodex Web Demo</title>
+    <link rel="stylesheet" href="frontend/styles/main.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .note {
+            background-color: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>ProteinCodex</h1>
+                <button id="new-chat-btn" class="icon-btn">
+                    <i class="fas fa-plus"></i> New Chat
+                </button>
+            </div>
+            <div class="sidebar-content">
+                <div class="chat-history" id="chat-history">
+                    <!-- Chat history will be populated here -->
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <span>ProteinCodex Web Demo v1.0</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="intro-message">
+                        <h2>Welcome to ProteinCodex Web Demo</h2>
+                        <p>Your AI-powered protein structure analysis assistant</p>
+                        
+                        <div class="note">
+                            <p><strong>Note:</strong> For full functionality including screenshot capture and PyMOL integration, please run the Electron app.</p>
+                            <p>This web demo shows the UI and basic chat functionality only.</p>
+                        </div>
+                        
+                        <div class="sample-prompts">
+                            <div class="prompt-group">
+                                <h3>Load and visualize proteins</h3>
+                                <div class="prompt-item" data-prompt="/pymol fetch 1hpv">
+                                    Load HIV protease (PDB: 1HPV)
+                                </div>
+                                <div class="prompt-item" data-prompt="/pymol show surface; color spectrum">
+                                    Show surface colored by spectrum
+                                </div>
+                            </div>
+                            
+                            <div class="prompt-group">
+                                <h3>Analyze protein structure</h3>
+                                <div class="prompt-item" data-prompt="Analyze the protein structure of HIV protease">
+                                    Analyze HIV protease
+                                </div>
+                                <div class="prompt-item" data-prompt="What are the key structural features of this protein?">
+                                    Identify key features
+                                </div>
+                            </div>
+                            
+                            <div class="prompt-group">
+                                <h3>PyMOL programming</h3>
+                                <div class="prompt-item" data-prompt="/pymol color red, chain A; color blue, chain B">
+                                    Color different chains
+                                </div>
+                                <div class="prompt-item" data-prompt="/pymol select active_site, resn HIS+GLU+ASP+LYS+TYR and within 5 of het">
+                                    Select active site residues
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <div class="tools-btn">
+                            <button id="capture-btn" class="icon-btn" title="Capture PyMOL Screenshot (Electron only)">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                        </div>
+                        <textarea id="chat-input" placeholder="Message ProteinCodex..." rows="1"></textarea>
+                        <button id="send-btn" class="icon-btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <div class="input-footer">
+                        <span>PyMOL commands start with /pymol</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="visualization-panel" id="visualization-panel">
+            <div class="panel-header">
+                <h3>Visualization</h3>
+                <div class="panel-controls">
+                    <button id="refresh-view-btn" class="icon-btn" title="Refresh View">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button id="toggle-panel-btn" class="icon-btn" title="Toggle Panel">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div id="pymol-view">
+                    <img id="pymol-screenshot" src="placeholder-molecule.png" alt="PyMOL View" />
+                    <div class="screenshot-info">
+                        <span id="screenshot-timestamp">Demo view (not connected to PyMOL)</span>
+                    </div>
+                </div>
+                <div class="view-controls">
+                    <button id="capture-view-btn" class="btn">
+                        <i class="fas fa-camera"></i> Capture View
+                    </button>
+                    <button id="analyze-view-btn" class="btn">
+                        <i class="fas fa-search"></i> Analyze View
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.0.0/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="frontend/utils/api.js"></script>
+    <script src="frontend/components/chat.js"></script>
+    <script src="frontend/components/pymol.js"></script>
+    <script src="frontend/components/ui.js"></script>
+    
+    <script>
+        // Override electron API for web demo
+        window.electronAPI = {
+            captureScreen: (windowTitle) => {
+                return Promise.reject(new Error('Screenshot capture not available in web demo. Please use the Electron app.'));
+            },
+            sendToPyMOL: (command) => {
+                return Promise.reject(new Error('PyMOL integration not available in web demo. Please use the Electron app.'));
+            }
+        };
+        
+        // Simple web-only implementation
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('send-btn').addEventListener('click', () => {
+                const chatInput = document.getElementById('chat-input');
+                const message = chatInput.value.trim();
+                
+                if (!message) return;
+                
+                // Add user message
+                addMessageToUI('user', message);
+                
+                // Clear input
+                chatInput.value = '';
+                
+                // Add mock response after delay
+                setTimeout(() => {
+                    let response;
+                    
+                    if (message.startsWith('/pymol')) {
+                        response = "This is a web demo. PyMOL commands are only available in the Electron app. In the full app, this command would be sent to PyMOL for execution.";
+                    } else {
+                        response = "This is a web demo with limited functionality. In the full app, this message would be processed by Gemini 2.5 Flash for an intelligent response about protein structures.";
+                    }
+                    
+                    addMessageToUI('assistant', response);
+                }, 1000);
+            });
+            
+            function addMessageToUI(role, content) {
+                const messagesContainer = document.getElementById('chat-messages');
+                
+                // Remove intro message if present
+                const introMessage = messagesContainer.querySelector('.intro-message');
+                if (introMessage) {
+                    messagesContainer.removeChild(introMessage);
+                }
+                
+                // Create message element
+                const messageEl = document.createElement('div');
+                messageEl.className = `message ${role}`;
+                
+                // Create avatar
+                const avatarEl = document.createElement('div');
+                avatarEl.className = 'message-avatar';
+                avatarEl.innerText = role === 'user' ? 'U' : 'P';
+                
+                // Create content container
+                const contentEl = document.createElement('div');
+                contentEl.className = 'message-content';
+                
+                // Create text element with markdown support
+                const textEl = document.createElement('div');
+                textEl.className = 'message-text';
+                textEl.innerHTML = marked.parse(content);
+                
+                // Assemble message
+                contentEl.appendChild(textEl);
+                messageEl.appendChild(avatarEl);
+                messageEl.appendChild(contentEl);
+                
+                // Add to messages container
+                messagesContainer.appendChild(messageEl);
+                
+                // Scroll to bottom
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+            
+            // Handle sample prompts
+            document.querySelectorAll('.prompt-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const prompt = item.getAttribute('data-prompt');
+                    document.getElementById('chat-input').value = prompt;
+                });
+            });
+        });
+    </script>
+</body>
+</html>

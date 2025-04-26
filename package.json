@@ -1,0 +1,36 @@
+{
+  "name": "proteincodeex",
+  "version": "1.0.0",
+  "description": "A ChatGPT-like UI for interacting with protein structures in PyMOL",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm run start-server\" \"npm run start\"",
+    "start-server": "python backend/server.py",
+    "build": "electron-builder"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.5.0",
+    "electron-screenshot": "^1.0.5",
+    "electron-store": "^8.1.0",
+    "marked": "^9.0.0",
+    "socket.io-client": "^4.7.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.1",
+    "electron": "^26.2.0",
+    "electron-builder": "^24.6.3"
+  },
+  "build": {
+    "appId": "com.proteincodeex.app",
+    "productName": "ProteinCodex",
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}

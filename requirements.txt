@@ -1,0 +1,11 @@
+flask==2.3.3
+flask-cors==4.0.0
+requests==2.31.0
+pillow==10.0.0
+python-dotenv==1.0.0
+google-generativeai==0.3.1
+minio==7.1.15
+socketio==0.2.1
+flask-socketio==5.3.4
+python-socketio==5.8.0
+opencv-python==4.8.0.76

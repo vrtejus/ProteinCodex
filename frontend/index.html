@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProteinCodex</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>ProteinCodex</h1>
+                <button id="new-chat-btn" class="icon-btn">
+                    <i class="fas fa-plus"></i> New Chat
+                </button>
+            </div>
+            <div class="sidebar-content">
+                <div class="chat-history" id="chat-history">
+                    <!-- Chat history will be populated here -->
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <span>ProteinCodex v1.0</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="intro-message">
+                        <h2>Welcome to ProteinCodex</h2>
+                        <p>Your AI-powered protein structure analysis assistant</p>
+                        
+                        <div class="sample-prompts">
+                            <div class="prompt-group">
+                                <h3>Load and visualize proteins</h3>
+                                <div class="prompt-item" data-prompt="/pymol fetch 1hpv">
+                                    Load HIV protease (PDB: 1HPV)
+                                </div>
+                                <div class="prompt-item" data-prompt="/pymol show surface; color spectrum">
+                                    Show surface colored by spectrum
+                                </div>
+                            </div>
+                            
+                            <div class="prompt-group">
+                                <h3>Analyze protein structure</h3>
+                                <div class="prompt-item" data-prompt="Capture a screenshot of PyMOL and analyze the protein structure visible">
+                                    Analyze the current view
+                                </div>
+                                <div class="prompt-item" data-prompt="What are the key structural features of this protein?">
+                                    Identify key features
+                                </div>
+                            </div>
+                            
+                            <div class="prompt-group">
+                                <h3>PyMOL programming</h3>
+                                <div class="prompt-item" data-prompt="/pymol color red, chain A; color blue, chain B">
+                                    Color different chains
+                                </div>
+                                <div class="prompt-item" data-prompt="/pymol select active_site, resn HIS+GLU+ASP+LYS+TYR and within 5 of het">
+                                    Select active site residues
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <div class="tools-btn">
+                            <button id="capture-btn" class="icon-btn" title="Capture PyMOL Screenshot">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                        </div>
+                        <textarea id="chat-input" placeholder="Message ProteinCodex..." rows="1"></textarea>
+                        <button id="send-btn" class="icon-btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <div class="input-footer">
+                        <span>PyMOL commands start with /pymol</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="visualization-panel" id="visualization-panel">
+            <div class="panel-header">
+                <h3>Visualization</h3>
+                <div class="panel-controls">
+                    <button id="refresh-view-btn" class="icon-btn" title="Refresh View">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button id="toggle-panel-btn" class="icon-btn" title="Toggle Panel">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div id="pymol-view">
+                    <img id="pymol-screenshot" src="" alt="PyMOL View" />
+                    <div class="screenshot-info">
+                        <span id="screenshot-timestamp">No screenshot captured</span>
+                    </div>
+                </div>
+                <div class="view-controls">
+                    <button id="capture-view-btn" class="btn">
+                        <i class="fas fa-camera"></i> Capture View
+                    </button>
+                    <button id="analyze-view-btn" class="btn">
+                        <i class="fas fa-search"></i> Analyze View
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.0.0/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="utils/api.js"></script>
+    <script src="components/chat.js"></script>
+    <script src="components/pymol.js"></script>
+    <script src="components/ui.js"></script>
+</body>
+</html>
