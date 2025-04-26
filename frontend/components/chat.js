@@ -11,14 +11,17 @@ class ChatUI {
         this.newChatButton = document.getElementById('new-chat-btn');
         this.chatHistory = document.getElementById('chat-history');
         this.captureButton = document.getElementById('capture-btn');
-        
+
         // State
         this.isProcessing = false;
-        this.chatId = Date.now().toString();
+        this.currentChatId = null; // Initialize chatId as null
         this.lastScreenshotPath = null;
-        
+        // Basic local storage for messages per chat (can be enhanced later)
+        this.chatMessagesStore = {}; // { chatId: [{ role, content }, ...], ... }
+
         // Initialize
         this.initEventListeners();
+        this.startNewChat(); // Start with a new chat session on load
         this.autoResizeInput();
     }
     
@@ -36,11 +39,30 @@ class ChatUI {
                 this.sendMessage();
             }
         });
-        
-        // Handle new chat button
+
+        // New chat button
         this.newChatButton.addEventListener('click', () => this.startNewChat());
-        
-        // Handle sample prompts
+
+        // Sample prompts (attach listener dynamically in startNewChat)
+
+        // Capture button
+        this.captureButton.addEventListener('click', () => this.captureScreenshot());
+
+        // Chat history switching (Basic implementation)
+        this.chatHistory.addEventListener('click', (e) => {
+            if (e.target && e.target.classList.contains('chat-item')) {
+                const chatIdToLoad = e.target.dataset.id;
+                if (chatIdToLoad && chatIdToLoad !== this.currentChatId) {
+                    this.loadChat(chatIdToLoad);
+                }
+            }
+        });
+    }
+
+    /**
+     * Attach listeners to dynamically added sample prompts
+     */
+    attachSamplePromptListeners() {
         document.querySelectorAll('.prompt-item').forEach(item => {
             item.addEventListener('click', () => {
                 const prompt = item.getAttribute('data-prompt');
@@ -49,9 +71,6 @@ class ChatUI {
                 this.autoResizeInput();
             });
         });
-        
-        // Handle image capture button
-        this.captureButton.addEventListener('click', () => this.captureScreenshot());
     }
     
     /**
@@ -72,57 +91,68 @@ class ChatUI {
      */
     async sendMessage() {
         const message = this.chatInput.value.trim();
-        if (!message || this.isProcessing) return;
-        
+        // Ensure we have a chat ID - shouldn't happen if startNewChat runs first, but good practice
+        if (!this.currentChatId) {
+            console.warn("No currentChatId set, starting a new chat first.");
+            this.startNewChat(); // Ensure a chat exists
+        }
+        if ((!message && !this.lastScreenshotPath) || this.isProcessing) return;
+
         this.isProcessing = true;
-        
-        // Add user message to UI
+
+        // Add user message to UI and local store
         this.addMessageToUI('user', message);
-        
+        this.storeMessage(this.currentChatId, 'user', message);
+
         // Clear input
         this.chatInput.value = '';
         this.chatInput.style.height = 'auto';
         
         // Show typing indicator
         const typingIndicator = this.addTypingIndicator();
-        
+
+        const messageToSend = message; // Capture message before clearing input potentially
+        const imagePathToSend = this.lastScreenshotPath; // Capture image path
+        this.lastScreenshotPath = null; // Clear path immediately after capturing for sending
+        document.getElementById('screenshot-preview-container')?.remove(); // Clear preview
+
         try {
-            let response;
-            
+            let apiResponse; // Use a generic name
+
             // Check if it's a PyMOL command
-            if (message.startsWith('/pymol ')) {
-                const command = message.substring(7);
-                const result = await api.executePyMOL(command);
-                response = {
-                    response: `PyMOL executed: ${command}\nResult: ${JSON.stringify(result.result)}`
-                };
-                
-                // Refresh PyMOL view after command
-                pymolUI.refreshView();
-            } else {
-                // Regular chat message
-                response = await api.sendMessage(message, this.lastScreenshotPath);
-                this.lastScreenshotPath = null; // Clear after use
-            }
-            
+            // Let the backend handle /pymol prefix vs Gemini processing now
+            apiResponse = await api.sendMessage(messageToSend, this.currentChatId, imagePathToSend);
+
+            // Check if this was the first message of the chat to add to history sidebar
+            const isFirstMessage = !(this.chatMessagesStore[this.currentChatId]?.length > 1); // Check before adding assistant msg
+
             // Remove typing indicator
             this.messagesContainer.removeChild(typingIndicator);
-            
-            // Add assistant response to UI
-            this.addMessageToUI('assistant', response.response);
-            
-            // Add chat to history if it's a new chat
-            if (this.messagesContainer.querySelectorAll('.message').length === 2) {
-                this.addChatToHistory(message);
+
+            // Add assistant response to UI and local store
+            this.addMessageToUI('assistant', apiResponse.response);
+            this.storeMessage(this.currentChatId, 'assistant', apiResponse.response);
+
+            // Add chat to history sidebar if it's the first user message
+            if (isFirstMessage && messageToSend) { // Only add if user sent text
+                this.addChatToHistorySidebar(this.currentChatId, messageToSend);
             }
+
+            // Refresh PyMOL view if likely successful (optional)
+            if (!apiResponse.response.toLowerCase().includes("error")) {
+                this.tryRefreshPyMOLView();
+            }
+
         } catch (error) {
             console.error('Error sending message:', error);
             
             // Remove typing indicator
             this.messagesContainer.removeChild(typingIndicator);
-            
+
             // Add error message
-            this.addMessageToUI('assistant', `Error: ${error.message}`);
+            const errorText = `Error: ${error.message || String(error)}`;
+            this.addMessageToUI('assistant', errorText);
+            this.storeMessage(this.currentChatId, 'assistant', errorText); // Store error too
         } finally {
             this.isProcessing = false;
             this.scrollToBottom();
@@ -140,11 +170,13 @@ class ChatUI {
         if (introMessage) {
             this.messagesContainer.removeChild(introMessage);
         }
-        
+
+        const shouldScroll = this.messagesContainer.scrollTop + this.messagesContainer.clientHeight >= this.messagesContainer.scrollHeight - 50;
+
         // Create message element
         const messageEl = document.createElement('div');
-        messageEl.className = `message ${role}`;
-        
+        messageEl.className = `message message-${role}`; // Use specific classes
+
         // Create avatar
         const avatarEl = document.createElement('div');
         avatarEl.className = 'message-avatar';
@@ -166,9 +198,11 @@ class ChatUI {
         
         // Add to messages container
         this.messagesContainer.appendChild(messageEl);
-        
-        // Scroll to bottom
-        this.scrollToBottom();
+
+        // Scroll to bottom only if already near the bottom
+        if (shouldScroll) {
+            this.scrollToBottom();
+        }
     }
     
     /**
@@ -177,11 +211,11 @@ class ChatUI {
      */
     addTypingIndicator() {
         const messageEl = document.createElement('div');
-        messageEl.className = 'message assistant';
-        
+        messageEl.className = 'message message-assistant typing-indicator-container'; // Add class for easier removal
+
         const avatarEl = document.createElement('div');
         avatarEl.className = 'message-avatar';
-        avatarEl.innerText = 'P';
+        avatarEl.innerText = 'P'; // Or use an icon
         
         const contentEl = document.createElement('div');
         contentEl.className = 'message-content';
@@ -215,19 +249,32 @@ class ChatUI {
     /**
      * Add chat to history sidebar
      * @param {string} title - Chat title (first message)
+     * @param {string} chatId - The ID of the chat
      */
-    addChatToHistory(title) {
+    addChatToHistorySidebar(chatId, title) {
+        // Avoid adding if it already exists
+        if (this.chatHistory.querySelector(`.chat-item[data-id="${chatId}"]`)) {
+            return;
+        }
+
         const chatItem = document.createElement('div');
         chatItem.className = 'chat-item active';
-        chatItem.innerText = title.length > 28 ? title.substring(0, 25) + '...' : title;
-        chatItem.dataset.id = this.chatId;
-        
-        // Deactivate other chats
+        chatItem.innerText = title.substring(0, 28) + (title.length > 28 ? '...' : '');
+        chatItem.dataset.id = chatId; // Use the actual chatId
+
+        // Deactivate other items
+        this.setActiveChatItem(chatId);
+
+        // Add to top of history
+        this.chatHistory.prepend(chatItem);
+    }
+
+    setActiveChatItem(chatId) {
         document.querySelectorAll('.chat-item').forEach(item => {
             item.classList.remove('active');
         });
-        
-        this.chatHistory.prepend(chatItem);
+        const currentItem = this.chatHistory.querySelector(`.chat-item[data-id="${chatId}"]`);
+        currentItem?.classList.add('active');
     }
     
     /**
@@ -236,8 +283,8 @@ class ChatUI {
     startNewChat() {
         // Clear messages
         this.messagesContainer.innerHTML = '';
-        
-        // Add intro message
+
+        // Add intro message (keep existing structure)
         this.messagesContainer.innerHTML = `
             <div class="intro-message">
                 <h2>Welcome to ProteinCodex</h2>
@@ -277,57 +324,149 @@ class ChatUI {
             </div>
         `;
         
-        // Reset state
-        this.chatId = Date.now().toString();
+        // Generate and set NEW chat ID
+        this.currentChatId = String(Date.now());
+        console.log("Starting new chat with ID:", this.currentChatId);
         this.lastScreenshotPath = null;
-        
+        document.getElementById('screenshot-preview-container')?.remove();
+
         // Clear input
         this.chatInput.value = '';
         this.chatInput.style.height = 'auto';
-        
-        // Clear history on server
-        api.clearHistory().catch(err => console.error('Error clearing history:', err));
-        
+
+        // Don't clear backend history automatically unless specifically requested
+        // api.clearHistory(this.currentChatId).catch(err => console.error('Error clearing history:', err));
+
+        // Ensure chatMessagesStore entry exists
+        if (!this.chatMessagesStore[this.currentChatId]) {
+            this.chatMessagesStore[this.currentChatId] = [];
+        }
+
+        // Deactivate all items in sidebar (new chat isn't added until first message)
+        this.setActiveChatItem(null);
+
         // Re-attach event listeners to sample prompts
-        document.querySelectorAll('.prompt-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const prompt = item.getAttribute('data-prompt');
-                this.chatInput.value = prompt;
-                this.chatInput.focus();
-                this.autoResizeInput();
-            });
-        });
+        this.attachSamplePromptListeners();
     }
-    
+
+    /**
+     * Load messages for a specific chat ID
+     * @param {string} chatId
+     */
+    loadChat(chatId) {
+        if (!chatId || !this.chatMessagesStore[chatId]) {
+            console.warn(`Chat history not found locally for chatId: ${chatId}. Starting new.`);
+            this.startNewChat(); // Or handle differently, maybe fetch from server if implemented
+            return;
+        }
+
+        console.log(`Loading chat: ${chatId}`);
+        this.currentChatId = chatId;
+        this.messagesContainer.innerHTML = ''; // Clear current messages
+
+        // Load messages from local store
+        const messages = this.chatMessagesStore[chatId];
+        messages.forEach(msg => {
+            this.addMessageToUI(msg.role, msg.content);
+        });
+
+        // Reset temporary state
+        this.lastScreenshotPath = null;
+        document.getElementById('screenshot-preview-container')?.remove();
+        this.chatInput.value = '';
+        this.chatInput.style.height = 'auto';
+
+        // Highlight the active chat item in the sidebar
+        this.setActiveChatItem(chatId);
+
+        this.scrollToBottom();
+        this.chatInput.focus();
+    }
+
+    /**
+     * Store a message in the local message store
+     * @param {string} chatId
+     * @param {string} role
+     * @param {string} content
+     */
+    storeMessage(chatId, role, content) {
+        if (!chatId) return; // Don't store if no chat ID
+        if (!this.chatMessagesStore[chatId]) {
+            this.chatMessagesStore[chatId] = [];
+        }
+        // Avoid storing empty messages unless it's maybe an assistant response placeholder?
+        // Simple implementation: only store non-empty content
+        if (content || role === 'assistant') { // Store assistant messages even if temporarily empty/error
+             this.chatMessagesStore[chatId].push({ role, content });
+        }
+    }
+
     /**
      * Capture a screenshot of PyMOL
      */
     async captureScreenshot() {
         try {
+            if (!window.electronAPI || typeof window.electronAPI.captureScreen !== 'function') {
+                 this.addMessageToUI('assistant', 'Screenshot capture is only available in the Electron app.');
+                 this.storeMessage(this.currentChatId, 'assistant', 'Screenshot capture is only available in the Electron app.');
+                 return;
+            }
             // Use Electron IPC to capture screen
-            window.electronAPI.captureScreen('PyMOL')
-                .then(result => {
-                    // Set the screenshot path for next message
-                    this.lastScreenshotPath = result.path;
-                    
-                    // Update the screenshot in the UI
-                    pymolUI.updateScreenshot(result.path);
-                    
-                    // Add suggested prompt
-                    this.chatInput.value = 'Analyze this protein structure and describe what you see.';
-                    this.chatInput.focus();
-                    this.autoResizeInput();
-                })
-                .catch(error => {
-                    console.error('Error capturing screenshot:', error);
-                    this.addMessageToUI('assistant', `Error capturing screenshot: ${error.message}`);
-                });
+            const result = await window.electronAPI.captureScreen('PyMOL'); // Use await
+
+            if (result && result.path) {
+                this.lastScreenshotPath = result.path;
+                pymolUI.updateScreenshot(result.path);
+                this.displayScreenshotPreview(result.path); // Show preview
+                this.chatInput.value = 'Analyze this protein structure and describe what you see.';
+                this.chatInput.focus();
+                this.autoResizeInput();
+            } else {
+                 throw new Error("Screenshot capture failed or returned no path.");
+            }
+
         } catch (error) {
             console.error('Error capturing screenshot:', error);
             this.addMessageToUI('assistant', `Error capturing screenshot: ${error.message}`);
+            this.storeMessage(this.currentChatId, 'assistant', `Error capturing screenshot: ${error.message}`);
         }
+    }
+
+    /**
+    * Add a preview of the captured screenshot above the input bar.
+    * @param {string} path - The file path of the screenshot.
+    */
+    displayScreenshotPreview(path) {
+        document.getElementById('screenshot-preview-container')?.remove(); // Remove old one
+        const inputContainer = document.querySelector('.chat-input-container');
+        const previewContainer = document.createElement('div');
+        previewContainer.id = 'screenshot-preview-container';
+        previewContainer.className = 'screenshot-preview'; // Add class for styling
+        const img = document.createElement('img');
+        img.src = `file://${path}`; // Use file protocol for local files in Electron
+        img.alt = 'Screenshot preview';
+        const closeButton = document.createElement('button');
+        closeButton.innerHTML = '×';
+        closeButton.onclick = () => {
+            previewContainer.remove();
+            this.lastScreenshotPath = null; // Clear path if preview removed
+        };
+        previewContainer.appendChild(img);
+        previewContainer.appendChild(closeButton);
+        inputContainer.insertBefore(previewContainer, inputContainer.firstChild);
     }
 }
 
 // Create chat UI instance
 const chatUI = new ChatUI();
+
+
+
+
+// Helper function (could be moved)
+function tryRefreshPyMOLView() {
+    if (window.electronAPI && typeof window.electronAPI.captureScreen === 'function') {
+        // Use a small delay to allow PyMOL to potentially update
+        setTimeout(() => pymolUI.refreshView(), 500);
+    }
+}
