@@ -406,6 +406,27 @@ body {
     color: #fff;
 }
 
+/* Voice Button Specific Styles */
+#voice-btn i {
+    transition: color 0.2s ease-in-out;
+}
+
+#voice-btn.listening-active {
+    background-color: rgba(255, 0, 0, 0.1); /* Light red background when active */
+}
+
+#voice-btn.listening-active i {
+    color: #e74c3c; /* Red icon when active */
+}
+
+#voice-btn.transcribing {
+    background-color: rgba(255, 0, 0, 0.2); /* Slightly darker red */
+    /* Optional: Add pulsing animation */
+    animation: pulse 1.5s infinite ease-in-out;
+}
+
+/* Add more specific styles as needed */
+
 /* Loading indicators */
 .typing-indicator {
     display: flex;
@@ -444,6 +465,16 @@ body {
         opacity: 1;
     }
 }
+
+/* Pulse Animation for Transcription */
+@keyframes pulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+    70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
+}
+
+/* Styles for Screenshot Preview */
+/* (Keep existing screenshot preview styles if added previously) */
 
 /* Responsive styles */
 @media (max-width: 1024px) {

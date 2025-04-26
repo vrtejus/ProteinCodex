@@ -11,11 +11,14 @@ class ChatUI {
         this.newChatButton = document.getElementById('new-chat-btn');
         this.chatHistory = document.getElementById('chat-history');
         this.captureButton = document.getElementById('capture-btn');
+        this.voiceButton = document.getElementById('voice-btn'); // Get voice button
 
         // State
         this.isProcessing = false;
         this.currentChatId = null; // Initialize chatId as null
         this.lastScreenshotPath = null;
+        this.isVoiceModeActive = false; // Track if voice input is enabled
+        this.isTranscribing = false; // Track if spacebar is down and transcribing
         // Basic local storage for messages per chat (can be enhanced later)
         this.chatMessagesStore = {}; // { chatId: [{ role, content }, ...], ... }
 
@@ -23,6 +26,7 @@ class ChatUI {
         this.initEventListeners();
         this.startNewChat(); // Start with a new chat session on load
         this.autoResizeInput();
+        this.initVoiceInput(); // Initialize voice listeners
     }
     
     /**
@@ -43,6 +47,9 @@ class ChatUI {
         // New chat button
         this.newChatButton.addEventListener('click', () => this.startNewChat());
 
+        // Voice Button Click
+        this.voiceButton.addEventListener('click', () => this.handleVoiceButtonClick());
+
         // Sample prompts (attach listener dynamically in startNewChat)
 
         // Capture button
@@ -56,6 +63,54 @@ class ChatUI {
                     this.loadChat(chatIdToLoad);
                 }
             }
+        });
+    }
+
+    /**
+     * Initialize listeners for voice input (Spacebar detection)
+     */
+    initVoiceInput() {
+        document.addEventListener('keydown', (e) => {
+            // Check if spacebar is pressed AND voice mode is active AND not currently transcribing
+            if (e.code === 'Space' && this.isVoiceModeActive && !this.isTranscribing) {
+                // Prevent spacebar from typing a space in the input if it's focused
+                if (document.activeElement === this.chatInput) {
+                    e.preventDefault();
+                }
+                this.startTranscription();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            // Check if spacebar is released AND we were transcribing
+            if (e.code === 'Space' && this.isTranscribing) {
+                this.stopTranscription();
+            }
+        });
+
+        // Listen for state changes from Main process
+        window.electronAPI.onVoiceStateChange(state => {
+            this.isVoiceModeActive = state.isActive;
+            this.isTranscribing = state.isTranscribing;
+            this.updateVoiceButtonUI();
+        });
+
+        // Listen for transcription results
+        window.electronAPI.onSttInterimResult(transcript => {
+            this.chatInput.value = transcript; // Update input with interim results
+        });
+        window.electronAPI.onSttFinalResult(transcript => {
+            this.chatInput.value = transcript; // Set final result
+            this.chatInput.focus(); // Focus input after transcription
+        });
+        window.electronAPI.onSttError(error => {
+            console.error("STT Error:", error);
+            this.addMessageToUI('assistant', `Speech Recognition Error: ${error}`);
+            this.storeMessage(this.currentChatId, 'assistant', `Speech Recognition Error: ${error}`);
+            // Reset state visually if needed
+            this.isVoiceModeActive = false;
+            this.isTranscribing = false;
+            this.updateVoiceButtonUI();
         });
     }
 
@@ -345,6 +400,8 @@ class ChatUI {
         // Deactivate all items in sidebar (new chat isn't added until first message)
         this.setActiveChatItem(null);
 
+        // Deactivate voice mode when starting new chat
+        this.deactivateVoiceModeIfNeeded();
         // Re-attach event listeners to sample prompts
         this.attachSamplePromptListeners();
     }
@@ -454,6 +511,52 @@ class ChatUI {
         previewContainer.appendChild(img);
         previewContainer.appendChild(closeButton);
         inputContainer.insertBefore(previewContainer, inputContainer.firstChild);
+    }
+
+    // --- Voice Input Methods ---
+
+    handleVoiceButtonClick() {
+        console.log('Voice button clicked');
+        // Send toggle command to main process
+        window.electronAPI.toggleVoiceMode();
+    }
+
+    startTranscription() {
+        if (!this.isVoiceModeActive) return; // Should not happen if called correctly
+        console.log('Spacebar pressed - starting transcription');
+        this.isTranscribing = true; // Assume transcribing starts immediately
+        this.updateVoiceButtonUI();
+        window.electronAPI.startTranscription();
+    }
+
+    stopTranscription() {
+        if (!this.isTranscribing) return; // Should not happen
+        console.log('Spacebar released - stopping transcription');
+        this.isTranscribing = false; // Assume transcribing stops immediately
+        this.updateVoiceButtonUI(); // Update UI based on isVoiceModeActive only now
+        window.electronAPI.stopTranscription();
+        // Optionally auto-send message here, or wait for user
+        // this.sendMessage();
+    }
+
+    updateVoiceButtonUI() {
+        this.voiceButton.classList.remove('listening-active', 'transcribing');
+        const icon = this.voiceButton.querySelector('i');
+        icon.className = 'fas fa-microphone'; // Reset icon
+
+        if (this.isTranscribing) {
+            this.voiceButton.classList.add('listening-active', 'transcribing');
+            icon.className = 'fas fa-waveform'; // Or keep mic and use animation
+        } else if (this.isVoiceModeActive) {
+            this.voiceButton.classList.add('listening-active');
+            // Icon changes handled by class styles now
+        }
+    }
+
+    deactivateVoiceModeIfNeeded() {
+        if(this.isVoiceModeActive) {
+            window.electronAPI.toggleVoiceMode(); // Tell main process to deactivate
+        }
     }
 }
 
