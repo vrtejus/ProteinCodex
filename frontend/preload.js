@@ -2,17 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   captureScreen: (windowTitle) => ipcRenderer.invoke('capture-screen', windowTitle),
-  sendToPyMOL: (command) => ipcRenderer.invoke('send-to-pymol', command), // Keep if needed
+  sendToPyMOL: (command) => ipcRenderer.invoke('send-to-pymol', command),
   // --- STT Channels ---
-  // Renamed for clarity, now explicitly sets state based on renderer logic
-  setVoiceModeActive: (isActive) => ipcRenderer.send('stt:set-voice-mode-active', isActive),
+  // Renderer manages active state locally now, main process only cares about transcription on/off
+  // setVoiceModeActive: (isActive) => ipcRenderer.send('stt:set-voice-mode-active', isActive), // Removed
   startTranscription: () => ipcRenderer.send('stt:start-transcription'),
-  // Renamed stop -> requestStop for clarity
-  requestStopTranscription: () => ipcRenderer.send('stt:request-stop-transcription'),
-  onVoiceStateChange: (callback) => ipcRenderer.on('stt:state-change', (_event, state) => callback(state)), // state: {isGloballyActive (maybe?), isTranscribing}
-  onSttInterimResult: (callback) => ipcRenderer.on('stt:interim-result', (_event, transcript) => callback(transcript)),
+  requestStopTranscription: () => ipcRenderer.send('stt:stop-transcription'),
+  // Renamed for clarity, only sends isTranscribing state now
+  onTranscriptionStateChange: (callback) => ipcRenderer.on('stt:transcription-state-change', (_event, isTranscribing) => callback(isTranscribing)),
+  onSttInterimResult: (callback) => ipcRenderer.on('stt:interim-result', (_event, transcript) => callback(transcript)), // Keep as is
   onSttFinalResult: (callback) => ipcRenderer.on('stt:final-result', (_event, transcript) => callback(transcript)),
-  onSttError: (callback) => ipcRenderer.on('stt:error', (_event, error) => callback(error)),
+  onSttError: (callback) => ipcRenderer.on('stt:error', (_event, error) => callback(error)), // Keep as is
 });
-
-// Expose ipcRenderer partially if needed for other things (use with caution)

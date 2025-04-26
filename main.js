@@ -174,11 +174,12 @@ ipcMain.on('stt:start-transcription', (event) => {
     }
 });
 
-ipcMain.on('stt:request-stop-transcription', (event) => { // Renamed handler
+ipcMain.on('stt:stop-transcription', (event) => { // Changed name back, but logic is "request stop"
     if (isTranscribing) {
         console.log("Main: Received stop-transcription. Sending command to helper.");
         // The helper sending 'finalResult' will trigger the state update now
         // We don't set isTranscribing = false here anymore. It's set when the helper
+        // **OR** we can optimistically set it false here IF the user explicitly stopped via button, TBD
         // confirms the end by sending 'finalResult' or 'error'.
         // sendVoiceStateUpdate(sender); // Optional: Update UI faster? Might cause flicker.
         // Tell the helper to stop processing audio for this request
@@ -202,7 +203,7 @@ function sendToRenderer(channel, ...args) {
 }
 
 function sendVoiceStateUpdate() { // Removed webContents arg, sends to mainWindow
-    sendToRenderer('stt:state-change', { isTranscribing: isTranscribing }); // Only send isTranscribing? isActive is renderer-managed
+    sendToRenderer('stt:transcription-state-change', isTranscribing); // Send boolean state on dedicated channel
 }
 
 function sendSttError(errorMessage) { // Removed webContents arg
@@ -354,8 +355,9 @@ function connectToSpeechHelper() {
                             break;
                         case 'error':
                              isTranscribing = false; // Assume error stops transcription
-                             isVoiceModeActive = false; // Turn off voice mode on error
-                             sendVoiceStateUpdate();
+                             isVoiceModeActive = false; // Turn off voice mode on error - RENDERER should manage this maybe?
+                             // Send false state explicitly on error
+                             sendToRenderer('stt:transcription-state-change', false);
                              sendSttError(message.message || "Unknown error from speech helper.");
                              break;
                         case 'ready': // Optional: Helper signals it's ready
@@ -378,7 +380,7 @@ function connectToSpeechHelper() {
         // Attempt to reconnect or notify user
         sendSttError(`Connection error with speech helper: ${err.message}`);
         // Deactivate voice mode on error
-        isTranscribing = false;
+        if (isTranscribing) isTranscribing = false; // Only change if it was true
         sendVoiceStateUpdate();
         if (sttSocketClient) sttSocketClient.destroy(); // Ensure cleanup
         sttSocketClient = null; // Reset client
@@ -391,11 +393,11 @@ function connectToSpeechHelper() {
 
     sttSocketClient.on('close', () => {
         console.log('Speech helper socket connection closed.');
-        if (isTranscribing || isVoiceModeActive) {
+        if (isTranscribing) { // If connection drops while actively transcribing
              sendSttError("Connection to speech helper closed unexpectedly.");
              // Reset state if connection drops mid-action
-        isTranscribing = false;
-        sendVoiceStateUpdate();
+             isTranscribing = false;
+             sendVoiceStateUpdate();
          }
         sttSocketClient = null; // Ensure client is nulled
         // unless helper process is still running (indicates socket issue)
