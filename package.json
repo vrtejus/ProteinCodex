@@ -30,7 +30,11 @@
       "output": "dist"
     },
     "mac": {
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "ProteinCodex needs access to your microphone to enable voice commands.",
+        "NSSpeechRecognitionUsageDescription": "ProteinCodex needs access to speech recognition to transcribe your voice commands."
+      }
     }
   }
 }

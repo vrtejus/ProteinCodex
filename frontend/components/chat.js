@@ -11,11 +11,14 @@ class ChatUI {
         this.newChatButton = document.getElementById('new-chat-btn');
         this.chatHistory = document.getElementById('chat-history');
         this.captureButton = document.getElementById('capture-btn');
+        this.voiceButton = document.getElementById('voice-btn'); // Get voice button
 
         // State
         this.isProcessing = false;
         this.currentChatId = null; // Initialize chatId as null
         this.lastScreenshotPath = null;
+        // Rename sttState -> voiceState for clarity (includes activation and transcription)
+        this.voiceState = { isActive: false, isTranscribing: false, spaceHeld: false };
         // Basic local storage for messages per chat (can be enhanced later)
         this.chatMessagesStore = {}; // { chatId: [{ role, content }, ...], ... }
 
@@ -23,6 +26,7 @@ class ChatUI {
         this.initEventListeners();
         this.startNewChat(); // Start with a new chat session on load
         this.autoResizeInput();
+        this.initVoiceInput(); // Initialize voice listeners
     }
     
     /**
@@ -40,8 +44,8 @@ class ChatUI {
             }
         });
 
-        // New chat button
-        this.newChatButton.addEventListener('click', () => this.startNewChat());
+        // Voice Button Click - Now explicitly toggles activation
+        this.voiceButton.addEventListener('click', () => this.toggleVoiceActivation());
 
         // Sample prompts (attach listener dynamically in startNewChat)
 
@@ -56,6 +60,99 @@ class ChatUI {
                     this.loadChat(chatIdToLoad);
                 }
             }
+        });
+    }
+
+    /**
+     * Initialize listeners for voice input (Spacebar detection)
+     */
+    initVoiceInput() {
+        // Global keydown listener
+        document.addEventListener('keydown', (e) => {
+            if (e.code !== 'Space' || e.repeat) {
+                // If space is held while already transcribing, prevent default still
+                if (e.code === 'Space' && this.voiceState.isTranscribing && document.activeElement === this.chatInput) {
+                     e.preventDefault();
+                 }
+                return; // Only handle first press of Spacebar
+            }
+
+            if (this.voiceState.spaceHeld) { // Already processing space down
+                return; // Only handle first press of Spacebar
+            }
+
+            const isInputFocused = document.activeElement === this.chatInput;
+            const isInputEmpty = this.chatInput.value.trim() === '';
+
+            // Scenario 1: Voice mode already active -> Start transcription
+            if (this.voiceState.isActive) {
+                console.log("Space down: Voice mode active, starting transcription.");
+                if (isInputFocused) e.preventDefault(); // Prevent space char
+                this.voiceState.spaceHeld = true; // Mark space as held
+                this.startTranscription();
+            }
+            // Scenario 2: Voice mode inactive BUT input empty or not focused -> Activate and Start
+            else if (!isInputFocused || isInputEmpty) {
+                console.log("Space down: Auto-activating voice mode and starting transcription.");
+                if (isInputFocused) e.preventDefault(); // Prevent space char if activating from empty input
+                this.voiceState.spaceHeld = true; // Mark space as held
+                this.setVoiceActivation(true); // Activate mode first
+                this.startTranscription();     // Then start
+            }
+            // Scenario 3: Voice inactive, input focused and has text -> Do nothing (allow normal space typing)
+            else {
+                 console.log("Space down: Normal space typing allowed.");
+            }
+        });
+
+        // Global keyup listener
+        document.addEventListener('keyup', (e) => {
+            // Check if spacebar is released AND we initiated transcription with space
+            if (e.code === 'Space' && this.voiceState.spaceHeld) {
+                console.log("Space up: Requesting stop transcription.");
+                this.voiceState.spaceHeld = false; // Mark space as released
+                // Request stop, sending will happen on final result
+                this.requestStopTranscription();
+            }
+        });
+
+        // Listen for transcription state changes FROM Main process
+        window.electronAPI.onTranscriptionStateChange(isTranscribing => {
+            // Primarily update isTranscribing based on main process/helper state
+            if (this.voiceState.isTranscribing !== isTranscribing) {
+                 console.log("Renderer: Transcription state change from Main:", isTranscribing);
+                 this.voiceState.isTranscribing = isTranscribing;
+                 this.updateVoiceButtonUI();
+                 // If transcription just stopped, maybe re-focus input?
+                 // if (!isTranscribing) { this.chatInput.focus(); }
+                }
+        });
+
+        // Listen for transcription results
+        window.electronAPI.onSttInterimResult(this.handleInterimResult.bind(this));
+        window.electronAPI.onSttFinalResult(transcript => {
+            this.chatInput.value = transcript; // Set final result
+            this.autoResizeInput();
+            // *** Send the message ONLY when the final result arrives ***
+            if (this.chatInput.value.trim()) { // Check if there's actual text
+                console.log("Renderer: Received final transcript, sending message.");
+                this.sendMessage();
+            } else {
+                 console.log("Renderer: Received empty/blank final transcript, not sending.");
+                 // Ensure transcription state is visually off
+                 this.voiceState.isTranscribing = false;
+                 this.updateVoiceButtonUI();
+            }
+             // Focus might be disruptive if user is already typing something else
+             // this.chatInput.focus();
+        });
+        window.electronAPI.onSttError(error => {
+            console.error("STT Error:", error);
+            this.addMessageToUI('assistant', `Speech Recognition Error: ${error}`);
+            if(this.currentChatId) this.storeMessage(this.currentChatId, 'assistant', `Speech Recognition Error: ${error}`); // Log error to chat history
+            // Reset state visually on error
+            this.voiceState = { isActive: false, isTranscribing: false, spaceHeld: false }; // Reset all state
+            this.updateVoiceButtonUI();
         });
     }
 
@@ -78,24 +175,21 @@ class ChatUI {
      */
     autoResizeInput() {
         this.chatInput.style.height = 'auto';
-        this.chatInput.style.height = (this.chatInput.scrollHeight) + 'px';
-        
-        this.chatInput.addEventListener('input', () => {
-            this.chatInput.style.height = 'auto';
-            this.chatInput.style.height = (this.chatInput.scrollHeight) + 'px';
-        });
+        // Add small buffer to prevent scrollbar flicker on single line
+        this.chatInput.style.height = (this.chatInput.scrollHeight + 2) + 'px';
     }
     
     /**
      * Send a message to the API
      */
     async sendMessage() {
-        const message = this.chatInput.value.trim();
         // Ensure we have a chat ID - shouldn't happen if startNewChat runs first, but good practice
-        if (!this.currentChatId) {
+        if (!this.currentChatId) { // Check if a chat exists
             console.warn("No currentChatId set, starting a new chat first.");
             this.startNewChat(); // Ensure a chat exists
+            return; // Prevent sending on initial auto-chat creation
         }
+        const message = this.chatInput.value.trim(); // Read value *now* before clearing
         if ((!message && !this.lastScreenshotPath) || this.isProcessing) return;
 
         this.isProcessing = true;
@@ -105,7 +199,6 @@ class ChatUI {
         this.storeMessage(this.currentChatId, 'user', message);
 
         // Clear input
-        this.chatInput.value = '';
         this.chatInput.style.height = 'auto';
         
         // Show typing indicator
@@ -115,6 +208,10 @@ class ChatUI {
         const imagePathToSend = this.lastScreenshotPath; // Capture image path
         this.lastScreenshotPath = null; // Clear path immediately after capturing for sending
         document.getElementById('screenshot-preview-container')?.remove(); // Clear preview
+        
+        // *** Clear input AFTER capturing messageToSend and imagePathToSend ***
+        this.chatInput.value = '';
+        this.autoResizeInput(); // Reset height after clearing
 
         try {
             let apiResponse; // Use a generic name
@@ -345,6 +442,8 @@ class ChatUI {
         // Deactivate all items in sidebar (new chat isn't added until first message)
         this.setActiveChatItem(null);
 
+        // Deactivate voice mode when starting new chat
+        if (this.voiceState.isActive) this.setVoiceActivation(false); // Only deactivate if active
         // Re-attach event listeners to sample prompts
         this.attachSamplePromptListeners();
     }
@@ -454,6 +553,81 @@ class ChatUI {
         previewContainer.appendChild(img);
         previewContainer.appendChild(closeButton);
         inputContainer.insertBefore(previewContainer, inputContainer.firstChild);
+    }
+
+    // --- Voice Input Methods ---
+
+    /** Explicitly toggles voice mode activation */
+    toggleVoiceActivation() {
+        const newState = !this.voiceState.isActive;
+        this.setVoiceActivation(newState);
+    }
+
+    /** Sets voice activation state and notifies main process */
+    setVoiceActivation(activate) {
+        if (this.voiceState.isActive === activate) return; // No change
+
+        this.voiceState.isActive = activate;
+        console.log(`Renderer: Setting Voice Mode Active: ${this.voiceState.isActive}`);
+        if (!activate && this.voiceState.isTranscribing) {
+            // If deactivating via button while transcribing, request stop
+            this.requestStopTranscription(); // Don't auto-send if deactivated via button
+        }
+        this.updateVoiceButtonUI();
+        // Inform main process about the desired state (optional, but good practice)
+        // window.electronAPI.setVoiceModeActive(this.voiceState.isActive); // Removed this IPC for now
+    }
+
+    startTranscription() {
+        // Called when spacebar is held (and conditions met)
+        if (this.voiceState.isTranscribing) return; // Already started
+        console.log('Renderer: Requesting start transcription');
+        this.voiceState.isTranscribing = true; // Optimistically set state
+        this.updateVoiceButtonUI();
+        window.electronAPI.startTranscription();
+    }
+
+    /** Requests the main process/helper to stop transcription */
+    requestStopTranscription() {
+        if (!this.voiceState.isTranscribing) return;
+        console.log(`Renderer: Requesting stop transcription`);
+        // Don't change local state here - wait for confirmation from main process
+        // via onTranscriptionStateChange or finalResult/error
+        window.electronAPI.requestStopTranscription(); // Tell main to stop helper
+    }
+    
+    /** Handles interim results from main process */
+    handleInterimResult(transcript) {
+         if (this.voiceState.isTranscribing) { // Only update if still supposed to be transcribing
+             // Store cursor position
+             const start = this.chatInput.selectionStart;
+             const end = this.chatInput.selectionEnd;
+
+             // Update value (this might cause focus issues if not careful)
+             this.chatInput.value = transcript;
+             this.autoResizeInput(); // Resize
+
+             // Try to restore cursor position (might be imperfect)
+             try {
+                 this.chatInput.setSelectionRange(start, end);
+             } catch (e) {
+                 // Ignore errors if element detached or focus lost
+             }
+         }
+    }
+
+    updateVoiceButtonUI() {
+        this.voiceButton.classList.remove('listening-active', 'transcribing');
+        const icon = this.voiceButton.querySelector('i');
+        icon.className = 'fas fa-microphone'; // Reset icon
+
+        if (this.voiceState.isTranscribing) {
+            this.voiceButton.classList.add('listening-active', 'transcribing');
+            icon.className = 'fas fa-waveform'; // Or keep mic and use animation
+        } else if (this.voiceState.isActive) {
+            this.voiceButton.classList.add('listening-active');
+            // Icon changes handled by class styles now
+        }
     }
 }
 
