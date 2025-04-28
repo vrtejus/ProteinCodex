@@ -18,7 +18,7 @@ ProteinCodex is a ChatGPT-like interface for interacting with protein structures
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/ProteinCodex.git
+git clone https://github.com/vrtejus/ProteinCodex.git
 cd ProteinCodex
 ```
 
@@ -50,36 +50,10 @@ This will start both the Flask backend server and the Electron frontend.
 
 ## Usage
 
-### PyMOL Commands
+### Example
 
-To send commands directly to PyMOL, prefix your message with `/pymol`, for example:
-```
-/pymol fetch 1hpv
-/pymol show surface
-/pymol color spectrum
-```
-
-### Screenshot Analysis
-
-1. Click the camera icon in the chat input or use the "Capture View" button in the visualization panel
-2. The application will capture the current PyMOL window
-3. Type a message to analyze the captured image, e.g., "What binding sites do you see in this protein structure?"
-
-### Common Commands
-
-- **Load a protein structure**: `/pymol fetch 1hpv` (replace 1hpv with any PDB ID)
-- **Change representation**: `/pymol show surface` or `/pymol show cartoon`
-- **Color by property**: `/pymol spectrum b, rainbow`
-- **Select residues**: `/pymol select active_site, resn HIS+ASP+SER and within 5 of het`
-- **Clear everything**: `/pymol reinitialize`
-
-## PyMOL Plugin Requirements
-
-The PyMOL plugin should:
-
-1. Listen on port 9876
-2. Accept JSON-formatted commands: `{"cmd": "your_pymol_command_here"}`
-3. Return execution results as JSON
+Simple command: Show me the protein studied in https://www.biorxiv.org/content/10.1101/2025.01.17.633529v1.full
+Complex compand: Locate one active-state complex solved with a G protein and one with β-arrestin for the same receptor subtype (e.g., 6GDG vs 6PWC for β2-adrenergic).Commands
 
 ## Architecture
 
